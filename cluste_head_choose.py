@@ -147,9 +147,10 @@ class ExpMemory():
 
 #创建actor-critic智能体
 class Actor(object):
-    def __init__(self, sess, n_features, n_actions, lr=0.001):
+    def __init__(self, sess, n_features, n_actions, lr=0.001, epsilon=0.8):
         self.sess = sess
-
+        self.epsilon = epsilon
+        self.n_actions=n_actions
         self.s = tf.placeholder(tf.float32, [1, n_features], "state")
         self.a = tf.placeholder(tf.int32, None, "act")
         self.td_error = tf.placeholder(tf.float32, None, "td_error")  # TD_error
@@ -189,8 +190,17 @@ class Actor(object):
     def choose_action(self, s):
         s = s[np.newaxis, :]
         probs = self.sess.run(self.acts_prob, {self.s: s})  # 获取所有操作的概率
-        return np.random.choice(np.arange(probs.shape[1]), p=probs.ravel())  # return a int
 
+        # e-greedy
+        if np.random.random() < self.epsilon:
+            action_chosen = np.random.randint(0, self.n_actions)
+        else:
+            action_chosen = np.random.choice(np.arange(probs.shape[1]), p=probs.ravel())
+        return action_chosen  # return a int
+
+    def decay_epsilon(self):
+        if self.epsilon > 0.03:
+            self.epsilon = self.epsilon - 0.02
 
 class Critic(object):
     def __init__(self, sess, n_features, lr=0.01):
@@ -244,7 +254,6 @@ def state_gen(state,action,obs):
     state_out.append(obs)
     state_out = state_out[2:]
     return np.asarray(state_out)
-
 
 # Fetch states,actions,observations and next state from memory
 def get_states(batch):
@@ -307,12 +316,12 @@ learning_rate = 1e-2            # Learning rate
 #gamma = 0.9                     # Discount Factor
 hidden_size = 128                # Hidden Size (Put 200 for perfectly correlated)
 pretrain_length = 16            # Pretrain Set to be known
-n_episodes = 2                # Number of episodes (equivalent to epochs)
+n_episodes = 20                # Number of episodes (equivalent to epochs)
 
-decay_epsilon_STEPS = 100       #降低探索概率次数
+decay_epsilon_STEPS = 2000       #降低探索概率次数
 UPDATE_PERIOD = 20  # update target network parameters目标网络随训练步数更新周期
 #Lay_num_list = [50,50] #隐藏层节点设置
-show_interval = 200  # To see loss trend iteration-wise (Put this 1 to see full trend)
+show_interval = 500  # To see loss trend iteration-wise (Put this 1 to see full trend)
 
 # 超参数A_C
 OUTPUT_GRAPH = False
@@ -326,7 +335,7 @@ LR_C = 0.001  # Critic学习率
 
 
 #DQN主程序
-
+'''
 if __name__ == "__main__":
     # 清空计算图
     tf.reset_default_graph()
@@ -529,6 +538,7 @@ if __name__ == "__main__":
         # plt.title('total rewards given per time_step')
         # plt.show()
 
+'''
 
 
 #A_C主程序
@@ -568,7 +578,6 @@ if __name__ == "__main__":
         for episode in range(n_episodes):
             total_rewards = 0
             #loss_init = 0
-
             print("-------------Episode " + str(episode) + "-----------")
             for time in range(len(data_in) - pretrain_length):
             #for time in range(TIME_SLOTS):
@@ -581,7 +590,8 @@ if __name__ == "__main__":
                 obs = data_in["channel" + str(int(action))][time + pretrain_length]  # Observe
                 #print(int(action),obs)
                 next_state = state_gen(state_in, action, obs)  # Go to next state
-                reward = obs
+                #reward = obs
+                reward = obs*2-1
                 total_rewards += reward  # Total Reward
                 td_error = critic.learn(state_in, reward, next_state)  # Critic 学习
                 actor.learn(state_in, action, td_error)  # Actor 学习
@@ -607,13 +617,20 @@ if __name__ == "__main__":
                 #     # print(np.shape(batch_actions))
 
                 update_iter += 1
-                loss_list.append(td_error)
+                loss_list.append(td_error**2)
                     #DQN.write.add_summary(summery, update_iter)
                     # if (episode == 0):
                     #     loss_0.append(loss)
 
+                # if (time <= 200):
+                #     print("Loss  at (t=" + str(time) + ") = " + str(td_error ** 2))
+                #     print(int(action), obs)
+
+                if update_iter % decay_epsilon_STEPS == 0:
+                    actor.decay_epsilon()  # 随训练进行减小探索力度
+
                 if (time % show_interval == 0):
-                    print("Loss  at (t=" + str(time) + ") = " + str(td_error))
+                    print("Loss  at (t=" + str(time) + ") = " + str(td_error**2))
                     print(int(action), obs)
                     # if update_iter % UPDATE_PERIOD == 0:
                     #     DQN.update_prmt()  # 更新目标Q网络
@@ -648,7 +665,7 @@ if __name__ == "__main__":
             obs = data_in["channel" + str(int(action))][time + pretrain_length]  # Observe
             # print(int(action),obs)
             next_state = state_gen(state_in, action, obs)  # Go to next state
-            reward = obs
+            reward = 2*obs-1
             total_rewards += reward  # Total Reward
             td_error = critic.learn(state_in, reward, next_state)  # Critic 学习
             actor.learn(state_in, action, td_error)  # Actor 学习
@@ -663,23 +680,66 @@ if __name__ == "__main__":
         print("AC_Total Reward: ")
         print(total_rewards / len(data_in))
 
+        print("-------------随机对比 -----------")
+        total_rewards = 0
+        r_r = []
+        a_r = []
+        reward_normalised_r = []
+        for time in range(len(data_in) - pretrain_length):
+            # for time in range(TIME_SLOTS):
+            prob_sample = np.random.rand()
+            state_in = np.array(history_input)  # Start State
+            # print(np.shape(state_in))
+
+            action = np.random.randint(0, action_size)  # 通过网络选择对应动作
+            # print(action)
+            obs = data_in["channel" + str(int(action))][time + pretrain_length]  # Observe
+            next_state = state_gen(state_in, action, obs)  # Go to next state
+            reward = 2*obs-1
+            r_r.append(reward)
+            a_r.append(action)
+            total_rewards += reward  # Total Reward
+            reward_normalised_r.append(total_rewards)
+            # exp_memory.add((state_in, action, reward, next_state))  # Add in exp memory
+            state_in = next_state
+            history_input = next_state
+        print("RANDOM_Total Reward: ")
+        print(total_rewards / len(data_in))
+
         print("-------------对比结果 -----------")
-        print(a_t_DRQN)
+        # print(a_t_DRQN)
         print(a_t_AC)
 
 
-        plt.figure(1)
-        # plt.subplot(121)
-        # plt.plot(np.arange(len(loss_list)), loss_list, "r-")
+        # plt.figure(1)
+        # # plt.subplot(121)
+        # # plt.plot(np.arange(len(loss_list)), loss_list, "r-")
+        # # plt.xlabel('Time Slots')
+        # # plt.ylabel('total loss')
+        # # plt.title('total loss given per time_step')
+        # # plt.subplot(122)
+        #
+        # plt.plot(np.arange(len(reward_normalised_r)), reward_normalised_DRQN, "y-")
+        # plt.plot(np.arange(len(reward_normalised_r)), reward_normalised_AC, "b-")
+        # plt.plot(np.arange(len(reward_normalised_r)), reward_normalised_r, "r:")
         # plt.xlabel('Time Slots')
-        # plt.ylabel('total loss')
-        # plt.title('total loss given per time_step')
-        # plt.subplot(122)
-        plt.plot(np.arange(len(reward_normalised_r)), reward_normalised_DRQN, "y-")
-        plt.plot(np.arange(len(reward_normalised_r)), reward_normalised_AC, "b-")
+        # plt.ylabel('total rewards')
+        # plt.legend(['DRQN','A_C', 'Random'])
+        # plt.title('total rewards given per time_step')
+        # plt.show()
+        loss_list=np.array(loss_list)
+        loss_list=loss_list[:,0,0]
+
+        plt.figure(1)
+        plt.plot(np.arange(len(loss_list)), loss_list, "r-")
+        plt.xlabel('Time Slots')
+        plt.ylabel('total loss')
+        plt.title('total loss given per time_step')
+        plt.figure(2)
+        plt.plot(np.arange(len(reward_normalised_AC)), reward_normalised_AC, "b-")
         plt.plot(np.arange(len(reward_normalised_r)), reward_normalised_r, "r:")
         plt.xlabel('Time Slots')
         plt.ylabel('total rewards')
-        plt.legend(['DRQN','A_C', 'Random'])
+        plt.legend([ 'A_C', 'Random'])
         plt.title('total rewards given per time_step')
         plt.show()
